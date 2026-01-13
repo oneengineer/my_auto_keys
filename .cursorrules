@@ -1,0 +1,18 @@
+# folder description
+
+this folder contains all kinds of auto hot keys script files.
+
+
+# programming guide
+1. search online for existing solution
+2. pay attention to the version of auto hot keys API
+3. we are using auto hot keys v2!
+4. always look up API online.
+5. make sure function parameters matches the online document.
+6. whenver you make a change, make sure it won't affect other fuctions.
+
+# verifiction
+1. always look up API you used online. verify them one by one to make sure they exist.
+2. check function parameter do exist.
+3. make sure the parameter types matches the docuemnts.
+4. always read the online docuemnts!
