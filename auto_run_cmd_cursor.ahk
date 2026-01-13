@@ -72,8 +72,11 @@ global logFile := scriptDir "\auto_cursor_log.txt"
 ; Run button pattern - REPLACE THIS WITH YOUR CAPTURED PATTERN
 global runButtonText := "|<>*89$69.zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz00000000DzzU00000000Tzw000000003zz000000000Dzs000000001zz000000000Dzs000000001zz07k000000Dzs0X0000001zz048000000Dzs0VA9Q0001zz04FVAE000Dzs0wA920001zz04lV8E000Dzs0WA920001zz048X8E000Dzs0V4N20001zz044x8E000Dzs000000001zz000000000Dzs000000001zz000000000Dzw000000003zzU00000000Tzz00000000Dzzzzzzzzzzzzzzzzzzzzzzzzw"
 
-; Next button pattern (optional) - capture if you have a Next button to click
-global nextButtonText := ""
+; Resume button pattern (optional)
+; This is a fallback target: when RUN is NOT found, the script will try this pattern and click it.
+global nextButtonText := "|<>**50$85.000000000000001zzzzzzzzzzzzy3U000000000001lU000000000000NU0000000000006U0000000000001E0000000000000c0000000000000I0000000000000+0TU000000000050AM00000000002U6A000000001U1E36D7Y9ysC0000c1W8aG4ta8U000I0yAP12Ml8M000+0N7wkVAEbw0M050AH0CEa8G00002U6BU18H49U0001E32E8aNW4F0/k0c1VbbVol2DU000I0000000000000+0000000000000500000000000002U0000000000001M0000000000001a0000000000001XU000000000001kTzzzzzzzzzzzzU00000000000001"
+
+
 
 ; Statistics tracking
 global searchCount := 0
@@ -413,7 +416,7 @@ UpdateImageStatus() {
     runStatus := (runButtonText != "" && !InStr(runButtonText, "PLACEHOLDER")) ? "✓ Configured" : "✗ Not set"
     nextStatus := (nextButtonText != "") ? "✓" : "(optional)"
     
-    imageStatusText.Text := "FindText: Run " runStatus "  |  Next " nextStatus
+    imageStatusText.Text := "FindText: Run " runStatus "  |  Resume " nextStatus
 }
 
 ; Get runtime as formatted string
@@ -608,7 +611,7 @@ CheckAndClick() {
         if result["found"] {
             clickCount++
             lastClickTime := FormatTime(, "HH:mm:ss")
-            AddLogEntry("click", "Clicked NEXT at (" result["clickX"] ", " result["clickY"] ")")
+            AddLogEntry("click", "Clicked RESUME at (" result["clickX"] ", " result["clickY"] ")")
             UpdateStatistics()
             return
         }
@@ -663,7 +666,7 @@ TryFindTextButton(textPattern, doClick := true) {
 
 ; Debug search function (GUI version) - using FindText
 DebugSearchGUI() {
-    global runButtonText, scriptDir
+    global runButtonText, nextButtonText, scriptDir
     global searchLeft, searchTop, searchRight, searchBottom, selectedMonitor
     
     AddLogEntry("debug", "Starting FindText debug search...")
@@ -680,51 +683,101 @@ DebugSearchGUI() {
     monLabel := selectedMonitor = 0 ? "All" : String(selectedMonitor)
     WriteLog("Testing FindText on monitor " monLabel "...")
     
-    ; Test FindText search
+    ; Test FindText search (RUN + optional RESUME)
     foundAny := false
-    firstFoundX := 0
-    firstFoundY := 0
-    foundWidth := 0
-    foundHeight := 0
-    resultCount := 0
     results := ""
     
+    runFoundAny := false
+    runFirstFoundX := 0
+    runFirstFoundY := 0
+    runFoundWidth := 0
+    runFoundHeight := 0
+
+    altFoundAny := false
+    altFirstFoundX := 0
+    altFirstFoundY := 0
+    altFoundWidth := 0
+    altFoundHeight := 0
+
+    ; ---- RUN pattern ----
     t1 := A_TickCount
     try {
         ; FindText with FindAll=1 to get all matches
-        ok := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, runButtonText, 1, 1)
-        searchTime := A_TickCount - t1
-        
-        if (ok && ok.Length > 0) {
+        okRun := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, runButtonText, 1, 1)
+        runSearchTime := A_TickCount - t1
+
+        results .= "RUN:`n"
+        if (okRun && okRun.Length > 0) {
             foundAny := true
-            resultCount := ok.Length
-            firstFoundX := ok[1].1
-            firstFoundY := ok[1].2
-            foundWidth := ok[1].3
-            foundHeight := ok[1].4
-            
-            results .= "Found " resultCount " match(es) in " searchTime "ms`n`n"
-            
-            ; List first 5 matches
-            Loop Min(ok.Length, 5) {
-                results .= "Match " A_Index ": (" ok[A_Index].1 ", " ok[A_Index].2 ") "
-                results .= "Center: (" ok[A_Index].x ", " ok[A_Index].y ") "
-                results .= "Size: " ok[A_Index].3 "x" ok[A_Index].4 "`n"
+            runFoundAny := true
+            runFirstFoundX := okRun[1].1
+            runFirstFoundY := okRun[1].2
+            runFoundWidth := okRun[1].3
+            runFoundHeight := okRun[1].4
+
+            results .= "Found " okRun.Length " match(es) in " runSearchTime "ms`n"
+            Loop Min(okRun.Length, 5) {
+                results .= "  - (" okRun[A_Index].1 ", " okRun[A_Index].2 ") "
+                results .= "Center: (" okRun[A_Index].x ", " okRun[A_Index].y ") "
+                results .= "Size: " okRun[A_Index].3 "x" okRun[A_Index].4 "`n"
             }
-            if (ok.Length > 5)
-                results .= "... and " (ok.Length - 5) " more`n"
-            
-            AddLogEntry("debug", "Found " resultCount " at (" firstFoundX ", " firstFoundY ")")
-            WriteLog("FindText: Found " resultCount " matches, first at (" firstFoundX ", " firstFoundY ")")
+            if (okRun.Length > 5)
+                results .= "  ... and " (okRun.Length - 5) " more`n"
+
+            AddLogEntry("debug", "RUN found " okRun.Length " at (" runFirstFoundX ", " runFirstFoundY ")")
+            WriteLog("FindText RUN: Found " okRun.Length " matches, first at (" runFirstFoundX ", " runFirstFoundY ")")
         } else {
-            results .= "NOT FOUND (searched in " searchTime "ms)`n"
-            AddLogEntry("debug", "Pattern not found")
-            WriteLog("FindText: Pattern not found")
+            results .= "NOT FOUND (searched in " runSearchTime "ms)`n"
+            AddLogEntry("debug", "RUN pattern not found")
+            WriteLog("FindText RUN: Pattern not found")
         }
+        results .= "`n"
     } catch Error as e {
-        results .= "ERROR: " e.Message "`n"
-        AddLogEntry("error", "FindText error: " e.Message)
-        WriteLog("FindText Error: " e.Message)
+        results .= "RUN: ERROR: " e.Message "`n`n"
+        AddLogEntry("error", "FindText RUN error: " e.Message)
+        WriteLog("FindText RUN Error: " e.Message)
+    }
+
+    ; ---- RESUME pattern (optional) ----
+    if (nextButtonText != "") {
+        t2 := A_TickCount
+        try {
+            okAlt := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, nextButtonText, 1, 1)
+            altSearchTime := A_TickCount - t2
+
+            results .= "RESUME:`n"
+            if (okAlt && okAlt.Length > 0) {
+                foundAny := true
+                altFoundAny := true
+                altFirstFoundX := okAlt[1].1
+                altFirstFoundY := okAlt[1].2
+                altFoundWidth := okAlt[1].3
+                altFoundHeight := okAlt[1].4
+
+                results .= "Found " okAlt.Length " match(es) in " altSearchTime "ms`n"
+                Loop Min(okAlt.Length, 5) {
+                    results .= "  - (" okAlt[A_Index].1 ", " okAlt[A_Index].2 ") "
+                    results .= "Center: (" okAlt[A_Index].x ", " okAlt[A_Index].y ") "
+                    results .= "Size: " okAlt[A_Index].3 "x" okAlt[A_Index].4 "`n"
+                }
+                if (okAlt.Length > 5)
+                    results .= "  ... and " (okAlt.Length - 5) " more`n"
+
+                AddLogEntry("debug", "RESUME found " okAlt.Length " at (" altFirstFoundX ", " altFirstFoundY ")")
+                WriteLog("FindText RESUME: Found " okAlt.Length " matches, first at (" altFirstFoundX ", " altFirstFoundY ")")
+            } else {
+                results .= "NOT FOUND (searched in " altSearchTime "ms)`n"
+                AddLogEntry("debug", "RESUME pattern not found")
+                WriteLog("FindText RESUME: Pattern not found")
+            }
+            results .= "`n"
+        } catch Error as e {
+            results .= "RESUME: ERROR: " e.Message "`n`n"
+            AddLogEntry("error", "FindText RESUME error: " e.Message)
+            WriteLog("FindText RESUME Error: " e.Message)
+        }
+    } else {
+        results .= "RESUME:`n(optional) not configured (nextButtonText is empty)`n`n"
     }
     
     WriteLog("DebugSearch completed")
@@ -733,9 +786,17 @@ DebugSearchGUI() {
     searchHeight := searchBottom - searchTop
     
     ; Extract pattern info for display
-    patternInfo := SubStr(runButtonText, 1, 50)
+    runPatternInfo := SubStr(runButtonText, 1, 50)
     if (StrLen(runButtonText) > 50)
-        patternInfo .= "..."
+        runPatternInfo .= "..."
+    altPatternInfo := ""
+    if (nextButtonText != "") {
+        altPatternInfo := SubStr(nextButtonText, 1, 50)
+        if (StrLen(nextButtonText) > 50)
+            altPatternInfo .= "..."
+    } else {
+        altPatternInfo := "(not set)"
+    }
     
     msg := "
     (
@@ -743,7 +804,8 @@ DebugSearchGUI() {
     FindText Debug Results
     =======================================
     
-    Pattern: " patternInfo "
+    RUN Pattern: " runPatternInfo "
+    RESUME Pattern: " altPatternInfo "
     
     Search Area (Monitor " monLabel "):
     - From: (" searchLeft ", " searchTop ")
@@ -769,7 +831,12 @@ DebugSearchGUI() {
     if foundAny {
         result := MsgBox("Show visual marker at found position?", "Debug", "YesNo")
         if (result = "Yes") {
-            FindText().MouseTip(firstFoundX + foundWidth // 2, firstFoundY + foundHeight // 2)
+            ; Prefer showing RUN marker if RUN was found, otherwise show RESUME marker.
+            if runFoundAny {
+                FindText().MouseTip(runFirstFoundX + runFoundWidth // 2, runFirstFoundY + runFoundHeight // 2)
+            } else if altFoundAny {
+                FindText().MouseTip(altFirstFoundX + altFoundWidth // 2, altFirstFoundY + altFoundHeight // 2)
+            }
         }
     }
 }
