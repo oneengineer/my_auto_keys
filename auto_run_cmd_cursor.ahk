@@ -55,6 +55,17 @@ global debugMode := true         ; Debug mode - show detailed info
 global checkInterval := 2000     ; Check interval (ms)
 global clickDelay := 1000        ; Delay after click (ms)
 
+; ============================================================
+; Click Hint (Visual cue) Settings
+; ============================================================
+; 在"瞬移/点击"前后显示红色圆环闪烁提示
+global clickHintEnabled := true
+global clickHintDurationMs := 500        ; 每个位置闪烁时长 (ms)
+global clickHintBlinkMs := 100           ; 闪烁间隔（越小闪得越快）
+global clickHintDiameter := 40           ; 圆环外径（像素）
+global clickHintThickness := 4           ; 圆环线宽（像素）
+global clickHintAlpha := 220             ; 透明度 0-255（255 不透明）
+
 ; Path variables
 global scriptDir := A_ScriptDir
 global logFile := scriptDir "\auto_cursor_log.txt"
@@ -649,10 +660,8 @@ TryFindTextButton(textPattern, doClick := true) {
             clickY := ok[1].y      ; Center Y (best for clicking)
             
             if doClick {
-                Click clickX, clickY
-                
-                ; Wait before continuing detection
-                Sleep(clickDelay)
+                ; 点击前后加“红圈闪烁提示”并将鼠标位置恢复
+                VisualClickWithHint(clickX, clickY)
             }
             return Map("found", true, "x", foundX, "y", foundY, "clickX", clickX, "clickY", clickY, "width", ok[1].3, "height", ok[1].4)
         }
@@ -662,6 +671,103 @@ TryFindTextButton(textPattern, doClick := true) {
     }
     
     return Map("found", false)
+}
+
+; ============================================================
+; Visual Click Hint Helpers (red flashing circle)
+; ============================================================
+
+; 执行一次“瞬移点击”：点击前闪烁（当前鼠标位置 0.5s + 目标位置 0.5s）
+; 点击后再闪烁一次（目标位置 0.5s + 原鼠标位置 0.5s），最后把鼠标移回原位
+VisualClickWithHint(targetX, targetY) {
+    global clickDelay, clickHintEnabled
+    global clickHintDurationMs, clickHintBlinkMs
+
+    MouseGetPos &origX, &origY
+
+    try {
+        if clickHintEnabled {
+            FlashRedCircle(origX, origY, clickHintDurationMs, clickHintBlinkMs)
+            FlashRedCircle(targetX, targetY, clickHintDurationMs, clickHintBlinkMs)
+        }
+
+        ; “瞬移”到目标位置再点击（避免 Click x,y 自带移动造成时序不可控）
+        MouseMove targetX, targetY, 0
+        Click
+
+        if clickHintEnabled {
+            FlashRedCircle(targetX, targetY, clickHintDurationMs, clickHintBlinkMs)
+            FlashRedCircle(origX, origY, clickHintDurationMs, clickHintBlinkMs)
+        }
+
+        ; 把鼠标位置变回来
+        MouseMove origX, origY, 0
+
+        ; Wait before continuing detection
+        Sleep(clickDelay)
+    } catch Error as e {
+        ; 尽量保证出错时也能把鼠标移回去
+        try MouseMove origX, origY, 0
+        throw e
+    }
+}
+
+; 在指定屏幕坐标显示"红色圆环闪烁"
+FlashRedCircle(centerX, centerY, durationMs := 500, blinkMs := 100) {
+    global clickHintDiameter, clickHintAlpha, clickHintThickness
+    gui := GetClickHintGui()
+
+    d := clickHintDiameter
+    x := Round(centerX - d // 2)
+    y := Round(centerY - d // 2)
+
+    ; 先定位并显示（NA = 不激活窗口）
+    gui.Show("NA x" x " y" y " w" d " h" d)
+    ApplyRingRegion(gui.Hwnd, d, clickHintThickness)
+    try WinSetTransparent(clickHintAlpha, "ahk_id " gui.Hwnd)
+
+    start := A_TickCount
+    visible := true
+    while (A_TickCount - start < durationMs) {
+        if visible
+            gui.Hide()
+        else
+            gui.Show("NA x" x " y" y " w" d " h" d)
+        visible := !visible
+        Sleep(blinkMs)
+    }
+    gui.Hide()
+}
+
+; 获取/复用提示 GUI（避免频繁创建销毁）
+GetClickHintGui() {
+    global __clickHintGui
+    if IsSet(__clickHintGui) && (__clickHintGui != "") {
+        return __clickHintGui
+    }
+
+    ; +E0x20: 让窗口“点穿”，避免影响鼠标点击/拖拽
+    g := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20", "ClickHint")
+    g.BackColor := "FF0000"
+    __clickHintGui := g
+    return g
+}
+
+; 将窗口裁成圆环形状（外圆 - 内圆 = 圆环）
+; 参考 findtext.ahk 的 RangeTip，用 GDI Region 组合实现
+ApplyRingRegion(hwnd, outerD, thickness := 4) {
+    ; 外圆
+    outerRgn := DllCall("CreateEllipticRgn", "int", 0, "int", 0, "int", outerD, "int", outerD, "ptr")
+    ; 内圆（居中）
+    innerD := outerD - thickness * 2
+    offset := thickness
+    innerRgn := DllCall("CreateEllipticRgn", "int", offset, "int", offset
+        , "int", offset + innerD, "int", offset + innerD, "ptr")
+    ; CombineRgn: RGN_XOR=3 => 外圆 XOR 内圆 = 圆环
+    DllCall("CombineRgn", "ptr", outerRgn, "ptr", outerRgn, "ptr", innerRgn, "int", 3)
+    DllCall("DeleteObject", "ptr", innerRgn)
+    ; SetWindowRgn 成功后系统接管 outerRgn，无需 DeleteObject
+    DllCall("SetWindowRgn", "ptr", hwnd, "ptr", outerRgn, "int", true)
 }
 
 ; Debug search function (GUI version) - using FindText
