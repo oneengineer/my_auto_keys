@@ -54,6 +54,15 @@ global isRunning := false
 global debugMode := true         ; Debug mode - show detailed info
 global checkInterval := 2000     ; Check interval (ms)
 global clickDelay := 1000        ; Delay after click (ms)
+; 输入继续模式配置
+global continueModeEnabled := false
+global continueInputText := "继续"
+global continueClickX := ""
+global continueClickY := ""
+global continueAfterClickDelayMs := 150
+global stopCheckIntervalMs := 20000     ; “继续+回车”整体动作间隔
+global lastStopCheckFound := false
+global lastContinueInputTime := 0
 
 ; ============================================================
 ; Click Hint (Visual cue) Settings
@@ -85,7 +94,15 @@ global runButtonText := "|<>*89$69.zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
 
 ; Resume button pattern (optional)
 ; This is a fallback target: when RUN is NOT found, the script will try this pattern and click it.
-global nextButtonText := "|<>**50$85.000000000000001zzzzzzzzzzzzy3U000000000001lU000000000000NU0000000000006U0000000000001E0000000000000c0000000000000I0000000000000+0TU000000000050AM00000000002U6A000000001U1E36D7Y9ysC0000c1W8aG4ta8U000I0yAP12Ml8M000+0N7wkVAEbw0M050AH0CEa8G00002U6BU18H49U0001E32E8aNW4F0/k0c1VbbVol2DU000I0000000000000+0000000000000500000000000002U0000000000001M0000000000001a0000000000001XU000000000001kTzzzzzzzzzzzzU00000000000001"
+global resumeButtonText := "|<>**50$85.000000000000001zzzzzzzzzzzzy3U000000000001lU000000000000NU0000000000006U0000000000001E0000000000000c0000000000000I0000000000000+0TU000000000050AM00000000002U6A000000001U1E36D7Y9ysC0000c1W8aG4ta8U000I0yAP12Ml8M000+0N7wkVAEbw0M050AH0CEa8G00002U6BU18H49U0001E32E8aNW4F0/k0c1VbbVol2DU000I0000000000000+0000000000000500000000000002U0000000000001M0000000000001a0000000000001XU000000000001kTzzzzzzzzzzzzU00000000000001"
+
+; Accept button pattern (optional)
+; This is another fallback target: when RUN is NOT found, the script will try this pattern and click it.
+global acceptButtonText := "|<>**50$87.000000000000000Dzzzzzzzzzzzzw70000000000000sk0000000000003A00000000000009000000000000008000000000000010000000000000080000000000000101U0000000000080C00000200000101E00000E000k080O3lswLbU1000102MkMAn6E0000080F4212Mm000001068UEDm2E0230080zY210EG000001044UE826E0000081Uq31WMX001S01086SD7WsA000008000000E0000001000000200000008000000E000000100000000000000A00000000000008k000000000000370000000000000w"
+
+; Stop button pattern (waiting state)
+; When STOP is visible, we consider it as waiting state and do NOT input "继续".
+global stopButtonText := "|<>**50$31.03zs007kT00701k0600A0600306000k6000A3000630001VU7y0kk63UME20k48108240U4120E20V0810Ek41UMM31kAA0zk6300061U0030M0030600301U0300Q07007kT000zy04"
 
 
 
@@ -119,6 +136,9 @@ global monitorDropdown := ""
 global monitorInfoText := ""
 global debugCheckbox := ""
 global alwaysOnTopCheckbox := ""
+global continueModeCheckbox := ""
+global continuePosText := ""
+global selectContinuePosBtn := ""
 global imageStatusText := ""
 
 ; ============================================================
@@ -236,7 +256,7 @@ WriteLog("Running as Admin: " (A_IsAdmin ? "Yes" : "No"))
 
 ; Create and show GUI
 CreateMainGUI()
-guiObj.Show("w420 h630")
+guiObj.Show("w420 h670")
 AddLogEntry("info", "Script started" (A_IsAdmin ? " [Admin]" : " [No Admin]"))
 UpdateImageStatus()
 
@@ -249,21 +269,7 @@ F9:: {
     ToggleAutoClick()
 }
 
-; F10 - Exit script (global)
-F10:: {
-    ExitApp
-}
-
-; F11 - Show status (now focuses GUI)
-F11:: {
-    guiObj.Show()
-}
-
-; F12 - Debug: manual search test
-F12:: {
-    WriteLog("F12 pressed - Starting debug search")
-    DebugSearchGUI()
-}
+; (Only Start/Stop keep hotkeys; others removed)
 
 ; ============================================================
 ; GUI Creation Function
@@ -274,7 +280,8 @@ CreateMainGUI() {
     global startBtn, stopBtn, intervalDropdown, delayDropdown
     global monitorDropdown, monitorInfoText
     global debugCheckbox, alwaysOnTopCheckbox
-    global imageStatusText, checkInterval, clickDelay, debugMode
+    global continueModeCheckbox, continuePosText, selectContinuePosBtn
+    global imageStatusText, checkInterval, clickDelay, debugMode, continueModeEnabled
     global selectedMonitor
     
     ; Create main window with AlwaysOnTop
@@ -308,7 +315,7 @@ CreateMainGUI() {
     
     ; ---- Settings Section ----
     guiObj.SetFont("s11 bold")
-    guiObj.Add("GroupBox", "x10 y180 w400 h130", "Settings")
+    guiObj.Add("GroupBox", "x10 y180 w400 h170", "Settings")
     guiObj.SetFont("s9 norm")
     
     ; Monitor Selection
@@ -340,34 +347,44 @@ CreateMainGUI() {
     ; Always On Top checkbox
     alwaysOnTopCheckbox := guiObj.Add("CheckBox", "x150 y283 w120 Checked", "Always On Top")
     alwaysOnTopCheckbox.OnEvent("Click", OnAlwaysOnTopToggle)
+
+    ; 输入继续模式
+    continueModeCheckbox := guiObj.Add("CheckBox", "x25 y305 w140", "输入继续模式")
+    continueModeCheckbox.Value := continueModeEnabled
+    continueModeCheckbox.OnEvent("Click", OnContinueModeToggle)
+
+    selectContinuePosBtn := guiObj.Add("Button", "x180 y302 w90 h22", "选择位置")
+    selectContinuePosBtn.OnEvent("Click", OnSelectContinuePos)
+
+    continuePosText := guiObj.Add("Text", "x25 y328 w360 h18 c666666", GetContinuePosText())
     
     ; ---- Live Log Section ----
     guiObj.SetFont("s11 bold")
-    guiObj.Add("GroupBox", "x10 y320 w400 h190", "Live Log")
+    guiObj.Add("GroupBox", "x10 y360 w400 h190", "Live Log")
     guiObj.SetFont("s9 norm")
     
     ; ListView for log entries
-    logListView := guiObj.Add("ListView", "x20 y345 w380 h155 NoSortHdr", ["Time", "Message"])
+    logListView := guiObj.Add("ListView", "x20 y385 w380 h155 NoSortHdr", ["Time", "Message"])
     logListView.ModifyCol(1, 70)
     logListView.ModifyCol(2, 300)
     
     ; ---- Control Buttons ----
     guiObj.SetFont("s10")
-    startBtn := guiObj.Add("Button", "x10 y520 w95 h35", "Start (F9)")
+    startBtn := guiObj.Add("Button", "x10 y560 w95 h35", "Start (F9)")
     startBtn.OnEvent("Click", OnStartClick)
     
-    stopBtn := guiObj.Add("Button", "x110 y520 w95 h35", "Stop (F9)")
+    stopBtn := guiObj.Add("Button", "x110 y560 w95 h35", "Stop (F9)")
     stopBtn.OnEvent("Click", OnStopClick)
     stopBtn.Enabled := false
     
-    guiObj.Add("Button", "x210 y520 w95 h35", "Test (F12)").OnEvent("Click", OnTestClick)
-    guiObj.Add("Button", "x310 y520 w95 h35", "Clear Log").OnEvent("Click", OnClearLogClick)
+    guiObj.Add("Button", "x210 y560 w95 h35", "Stop Button Test").OnEvent("Click", OnStopButtonTestClick)
+    guiObj.Add("Button", "x310 y560 w95 h35", "Clear Log").OnEvent("Click", OnClearLogClick)
     
-    guiObj.Add("Button", "x10 y560 w95 h35", "Exit (F10)").OnEvent("Click", OnExitClick)
+    guiObj.Add("Button", "x10 y600 w95 h35", "Exit").OnEvent("Click", OnExitClick)
     
     ; ---- Image Status Bar ----
     guiObj.SetFont("s9")
-    imageStatusText := guiObj.Add("Text", "x10 y600 w400 h20", "Images: Checking...")
+    imageStatusText := guiObj.Add("Text", "x10 y640 w400 h20", "Images: Checking...")
 }
 
 ; ============================================================
@@ -422,12 +439,14 @@ AddLogEntry(logType, message) {
 
 ; Update status bar for FindText patterns
 UpdateImageStatus() {
-    global imageStatusText, runButtonText, nextButtonText
+    global imageStatusText, runButtonText, resumeButtonText, acceptButtonText, stopButtonText
     
     runStatus := (runButtonText != "" && !InStr(runButtonText, "PLACEHOLDER")) ? "✓ Configured" : "✗ Not set"
-    nextStatus := (nextButtonText != "") ? "✓" : "(optional)"
+    stopStatus := (stopButtonText != "" && !InStr(stopButtonText, "PLACEHOLDER")) ? "✓ Configured" : "✗ Not set"
+    acceptStatus := (acceptButtonText != "") ? "✓" : "(optional)"
+    nextStatus := (resumeButtonText != "") ? "✓" : "(optional)"
     
-    imageStatusText.Text := "FindText: Run " runStatus "  |  Resume " nextStatus
+    imageStatusText.Text := "FindText: Run " runStatus "  |  Stop " stopStatus "  |  Accept " acceptStatus "  |  Resume " nextStatus
 }
 
 ; Get runtime as formatted string
@@ -467,8 +486,23 @@ OnStopClick(*) {
     }
 }
 
-OnTestClick(*) {
-    DebugSearchGUI()
+OnStopButtonTestClick(*) {
+    global stopButtonText
+
+    if (stopButtonText = "" || InStr(stopButtonText, "PLACEHOLDER")) {
+        MsgBox("Stop button 图像未配置。", "Stop Button Test", "Icon!")
+        return
+    }
+
+    result := TryFindTextButton(stopButtonText, false)
+    if result["found"] {
+        AddLogEntry("debug", "STOP found at (" result["clickX"] ", " result["clickY"] ")")
+        FindText().MouseTip(result["clickX"], result["clickY"])
+        MsgBox("Stop button: FOUND`n位置: (" result["clickX"] ", " result["clickY"] ")", "Stop Button Test", "Icon!")
+    } else {
+        AddLogEntry("debug", "STOP pattern not found")
+        MsgBox("Stop button: NOT FOUND", "Stop Button Test", "Icon!")
+    }
 }
 
 OnClearLogClick(*) {
@@ -551,12 +585,103 @@ OnAlwaysOnTopToggle(ctrl, *) {
     }
 }
 
+OnContinueModeToggle(ctrl, *) {
+    global continueModeEnabled, continueClickX, continueClickY, stopButtonText
+
+    if ctrl.Value {
+        if (continueClickX = "" || continueClickY = "") {
+            ctrl.Value := 0
+            continueModeEnabled := false
+            MsgBox("请先设置继续点击位置。", "Auto Cursor Runner", "Icon!")
+            return
+        }
+        continueModeEnabled := true
+        if (stopButtonText = "" || InStr(stopButtonText, "PLACEHOLDER")) {
+            AddLogEntry("warn", "Stop button 未配置，输入继续可能误触")
+        } else {
+            AddLogEntry("config", "输入继续模式 enabled")
+        }
+    } else {
+        continueModeEnabled := false
+        AddLogEntry("config", "输入继续模式 disabled")
+    }
+}
+
+OnSelectContinuePos(*) {
+    global continueClickX, continueClickY, continuePosText, guiObj, isRunning
+
+    if isRunning {
+        MsgBox("请先停止自动点击再设置位置。", "Auto Cursor Runner", "Icon!")
+        return
+    }
+
+    guiObj.Hide()
+    ToolTip("请将鼠标移到目标位置并单击左键")
+    KeyWait "LButton", "D"
+    MouseGetPos &continueClickX, &continueClickY
+    KeyWait "LButton"
+    ToolTip()
+    guiObj.Show()
+
+    continuePosText.Text := GetContinuePosText()
+    AddLogEntry("config", "Continue position set: (" continueClickX ", " continueClickY ")")
+}
+
+GetContinuePosText() {
+    global continueClickX, continueClickY
+    if (continueClickX = "" || continueClickY = "")
+        return "继续位置: 未设置"
+    return "继续位置: (" continueClickX ", " continueClickY ")"
+}
+
+HandleContinueInputIfNeeded() {
+    global continueModeEnabled, continueClickX, continueClickY
+    global stopButtonText, stopCheckIntervalMs, lastStopCheckFound
+    global lastContinueInputTime
+
+    if !continueModeEnabled
+        return false
+    if (continueClickX = "" || continueClickY = "")
+        return false
+    if (stopButtonText = "" || InStr(stopButtonText, "PLACEHOLDER"))
+        return false
+
+    now := A_TickCount
+
+    ; “继续+回车”整体动作限频
+    if (stopCheckIntervalMs > 0 && lastContinueInputTime != 0
+        && (now - lastContinueInputTime) < stopCheckIntervalMs) {
+        return false
+    }
+
+    ; 动作前必须检查 STOP
+    stopResult := TryFindTextButton(stopButtonText, false)
+    lastStopCheckFound := stopResult["found"]
+    if lastStopCheckFound
+        return false
+
+    DoContinueInput()
+    lastContinueInputTime := now
+    AddLogEntry("action", "输入继续: 已发送")
+    return true
+}
+
+DoContinueInput() {
+    global continueClickX, continueClickY, continueInputText, continueAfterClickDelayMs
+
+    VisualClickWithHint(continueClickX, continueClickY, 0)
+    if (continueAfterClickDelayMs > 0)
+        Sleep(continueAfterClickDelayMs)
+    SendText(continueInputText)
+    Send("{Enter}")
+}
+
 ; ============================================================
 ; Core Toggle Function
 ; ============================================================
 
 ToggleAutoClick() {
-    global isRunning, checkInterval, runButtonText, clickCount, searchCount, startTime
+    global isRunning, checkInterval, runButtonText, clickCount, searchCount, startTime, lastStopCheckFound, lastContinueInputTime
     global selectedMonitor, searchLeft, searchTop, searchRight, searchBottom
     
     isRunning := !isRunning
@@ -575,6 +700,8 @@ ToggleAutoClick() {
         clickCount := 0
         searchCount := 0
         startTime := A_TickCount
+        lastStopCheckFound := false
+        lastContinueInputTime := 0
         
         ; Start timers
         SetTimer(CheckAndClick, checkInterval)
@@ -603,7 +730,7 @@ ToggleAutoClick() {
 
 ; Check and click button using FindText
 CheckAndClick() {
-    global runButtonText, nextButtonText, clickDelay
+    global runButtonText, resumeButtonText, acceptButtonText, clickDelay
     global clickCount, lastClickTime, searchCount, debugMode
     
     ; Search for Run button using FindText
@@ -616,9 +743,21 @@ CheckAndClick() {
         return
     }
     
-    ; If nextButtonText is defined, try searching for it
-    if (nextButtonText != "") {
-        result := TryFindTextButton(nextButtonText, true)
+    ; If acceptButtonText is defined, try searching for it
+    if (acceptButtonText != "") {
+        result := TryFindTextButton(acceptButtonText, true)
+        if result["found"] {
+            clickCount++
+            lastClickTime := FormatTime(, "HH:mm:ss")
+            AddLogEntry("click", "Clicked ACCEPT at (" result["clickX"] ", " result["clickY"] ")")
+            UpdateStatistics()
+            return
+        }
+    }
+
+    ; If resumeButtonText is defined, try searching for it
+    if (resumeButtonText != "") {
+        result := TryFindTextButton(resumeButtonText, true)
         if result["found"] {
             clickCount++
             lastClickTime := FormatTime(, "HH:mm:ss")
@@ -633,6 +772,10 @@ CheckAndClick() {
     if debugMode && Mod(searchCount, 10) = 0 {
         ; Only log every 10th search to reduce spam
         AddLogEntry("search", "Searching... #" searchCount)
+    }
+    if HandleContinueInputIfNeeded() {
+        UpdateStatistics()
+        return
     }
     UpdateStatistics()
 }
@@ -679,9 +822,12 @@ TryFindTextButton(textPattern, doClick := true) {
 
 ; 执行一次“瞬移点击”：点击前闪烁（当前鼠标位置 0.5s + 目标位置 0.5s）
 ; 点击后再闪烁一次（目标位置 0.5s + 原鼠标位置 0.5s），最后把鼠标移回原位
-VisualClickWithHint(targetX, targetY) {
+VisualClickWithHint(targetX, targetY, postDelayMs := "") {
     global clickDelay, clickHintEnabled
     global clickHintDurationMs, clickHintBlinkMs
+
+    if (postDelayMs = "")
+        postDelayMs := clickDelay
 
     MouseGetPos &origX, &origY
 
@@ -704,7 +850,8 @@ VisualClickWithHint(targetX, targetY) {
         MouseMove origX, origY, 0
 
         ; Wait before continuing detection
-        Sleep(clickDelay)
+        if (postDelayMs > 0)
+            Sleep(postDelayMs)
     } catch Error as e {
         ; 尽量保证出错时也能把鼠标移回去
         try MouseMove origX, origY, 0
@@ -772,7 +919,7 @@ ApplyRingRegion(hwnd, outerD, thickness := 4) {
 
 ; Debug search function (GUI version) - using FindText
 DebugSearchGUI() {
-    global runButtonText, nextButtonText, scriptDir
+    global runButtonText, resumeButtonText, acceptButtonText, scriptDir
     global searchLeft, searchTop, searchRight, searchBottom, selectedMonitor
     
     AddLogEntry("debug", "Starting FindText debug search...")
@@ -789,7 +936,7 @@ DebugSearchGUI() {
     monLabel := selectedMonitor = 0 ? "All" : String(selectedMonitor)
     WriteLog("Testing FindText on monitor " monLabel "...")
     
-    ; Test FindText search (RUN + optional RESUME)
+    ; Test FindText search (RUN + optional ACCEPT/RESUME)
     foundAny := false
     results := ""
     
@@ -798,6 +945,12 @@ DebugSearchGUI() {
     runFirstFoundY := 0
     runFoundWidth := 0
     runFoundHeight := 0
+
+    acceptFoundAny := false
+    acceptFirstFoundX := 0
+    acceptFirstFoundY := 0
+    acceptFoundWidth := 0
+    acceptFoundHeight := 0
 
     altFoundAny := false
     altFirstFoundX := 0
@@ -844,12 +997,54 @@ DebugSearchGUI() {
         WriteLog("FindText RUN Error: " e.Message)
     }
 
-    ; ---- RESUME pattern (optional) ----
-    if (nextButtonText != "") {
+    ; ---- ACCEPT pattern (optional) ----
+    if (acceptButtonText != "") {
         t2 := A_TickCount
         try {
-            okAlt := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, nextButtonText, 1, 1)
-            altSearchTime := A_TickCount - t2
+            okAccept := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, acceptButtonText, 1, 1)
+            acceptSearchTime := A_TickCount - t2
+
+            results .= "ACCEPT:`n"
+            if (okAccept && okAccept.Length > 0) {
+                foundAny := true
+                acceptFoundAny := true
+                acceptFirstFoundX := okAccept[1].1
+                acceptFirstFoundY := okAccept[1].2
+                acceptFoundWidth := okAccept[1].3
+                acceptFoundHeight := okAccept[1].4
+
+                results .= "Found " okAccept.Length " match(es) in " acceptSearchTime "ms`n"
+                Loop Min(okAccept.Length, 5) {
+                    results .= "  - (" okAccept[A_Index].1 ", " okAccept[A_Index].2 ") "
+                    results .= "Center: (" okAccept[A_Index].x ", " okAccept[A_Index].y ") "
+                    results .= "Size: " okAccept[A_Index].3 "x" okAccept[A_Index].4 "`n"
+                }
+                if (okAccept.Length > 5)
+                    results .= "  ... and " (okAccept.Length - 5) " more`n"
+
+                AddLogEntry("debug", "ACCEPT found " okAccept.Length " at (" acceptFirstFoundX ", " acceptFirstFoundY ")")
+                WriteLog("FindText ACCEPT: Found " okAccept.Length " matches, first at (" acceptFirstFoundX ", " acceptFirstFoundY ")")
+            } else {
+                results .= "NOT FOUND (searched in " acceptSearchTime "ms)`n"
+                AddLogEntry("debug", "ACCEPT pattern not found")
+                WriteLog("FindText ACCEPT: Pattern not found")
+            }
+            results .= "`n"
+        } catch Error as e {
+            results .= "ACCEPT: ERROR: " e.Message "`n`n"
+            AddLogEntry("error", "FindText ACCEPT error: " e.Message)
+            WriteLog("FindText ACCEPT Error: " e.Message)
+        }
+    } else {
+        results .= "ACCEPT:`n(optional) not configured (acceptButtonText is empty)`n`n"
+    }
+
+    ; ---- RESUME pattern (optional) ----
+    if (resumeButtonText != "") {
+        t3 := A_TickCount
+        try {
+            okAlt := FindText(&X, &Y, searchLeft, searchTop, searchRight, searchBottom, 0, 0, resumeButtonText, 1, 1)
+            altSearchTime := A_TickCount - t3
 
             results .= "RESUME:`n"
             if (okAlt && okAlt.Length > 0) {
@@ -883,7 +1078,7 @@ DebugSearchGUI() {
             WriteLog("FindText RESUME Error: " e.Message)
         }
     } else {
-        results .= "RESUME:`n(optional) not configured (nextButtonText is empty)`n`n"
+        results .= "RESUME:`n(optional) not configured (resumeButtonText is empty)`n`n"
     }
     
     WriteLog("DebugSearch completed")
@@ -895,10 +1090,18 @@ DebugSearchGUI() {
     runPatternInfo := SubStr(runButtonText, 1, 50)
     if (StrLen(runButtonText) > 50)
         runPatternInfo .= "..."
+    acceptPatternInfo := ""
+    if (acceptButtonText != "") {
+        acceptPatternInfo := SubStr(acceptButtonText, 1, 50)
+        if (StrLen(acceptButtonText) > 50)
+            acceptPatternInfo .= "..."
+    } else {
+        acceptPatternInfo := "(not set)"
+    }
     altPatternInfo := ""
-    if (nextButtonText != "") {
-        altPatternInfo := SubStr(nextButtonText, 1, 50)
-        if (StrLen(nextButtonText) > 50)
+    if (resumeButtonText != "") {
+        altPatternInfo := SubStr(resumeButtonText, 1, 50)
+        if (StrLen(resumeButtonText) > 50)
             altPatternInfo .= "..."
     } else {
         altPatternInfo := "(not set)"
@@ -911,6 +1114,7 @@ DebugSearchGUI() {
     =======================================
     
     RUN Pattern: " runPatternInfo "
+    ACCEPT Pattern: " acceptPatternInfo "
     RESUME Pattern: " altPatternInfo "
     
     Search Area (Monitor " monLabel "):
@@ -937,9 +1141,11 @@ DebugSearchGUI() {
     if foundAny {
         result := MsgBox("Show visual marker at found position?", "Debug", "YesNo")
         if (result = "Yes") {
-            ; Prefer showing RUN marker if RUN was found, otherwise show RESUME marker.
+            ; Prefer showing RUN marker if RUN was found, otherwise show ACCEPT/RESUME marker.
             if runFoundAny {
                 FindText().MouseTip(runFirstFoundX + runFoundWidth // 2, runFirstFoundY + runFoundHeight // 2)
+            } else if acceptFoundAny {
+                FindText().MouseTip(acceptFirstFoundX + acceptFoundWidth // 2, acceptFirstFoundY + acceptFoundHeight // 2)
             } else if altFoundAny {
                 FindText().MouseTip(altFirstFoundX + altFoundWidth // 2, altFirstFoundY + altFoundHeight // 2)
             }
